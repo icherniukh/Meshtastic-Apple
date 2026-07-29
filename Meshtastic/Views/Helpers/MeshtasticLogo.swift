@@ -9,11 +9,17 @@ import SwiftUI
 struct MeshtasticLogo: View {
 
 	@Environment(\.colorScheme) var colorScheme
+	@EnvironmentObject var router: Router
+
+	private func showAbout() {
+		router.selectedTab = .settings
+		router.settingsPath = [.about]
+	}
 
 	var body: some View {
 		#if targetEnvironment(macCatalyst)
 			VStack {
-				Link(destination: URL(string: "meshtastic:///settings/about")!) {
+				Button(action: showAbout) {
 					if #available(iOS 26.0, macOS 26.0, *) {
 						Image(colorScheme == .dark ? "logo-white" : "logo-black")
 							.resizable()
@@ -26,25 +32,28 @@ struct MeshtasticLogo: View {
 							.scaledToFit()
 					}
 				}
+				.buttonStyle(.plain)
 			}
 			.padding(.bottom, 5)
 			.padding(.top, 5)
 		#else
 		if #available(iOS 26.0, macOS 26.0, *) {
 			VStack {
-				Link(destination: URL(string: "meshtastic:///settings/about")!) {
+				Button(action: showAbout) {
 					Image(colorScheme == .dark ? "logo-white" : "logo-black")
 						.resizable()
 						.scaledToFit()
 				}
+				.buttonStyle(.plain)
 			}
 		} else {
 			VStack {
-				Link(destination: URL(string: "meshtastic:///settings/about")!) {
+				Button(action: showAbout) {
 					Image(colorScheme == .dark ? "logo-white" : "logo-black")
 						.resizable()
 						.scaledToFit()
 				}
+				.buttonStyle(.plain)
 			}
 			.padding(.bottom, 5)
 		}
@@ -55,4 +64,5 @@ struct MeshtasticLogo: View {
 #Preview {
 	MeshtasticLogo()
 		.frame(width: 200, height: 44)
+		.environmentObject(Router())
 }
