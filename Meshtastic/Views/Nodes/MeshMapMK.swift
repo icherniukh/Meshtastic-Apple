@@ -113,7 +113,7 @@ struct MeshMapMK: View {
 	@State private var editingSettings = false
 	@State private var editingFilters = false
 	@State var selectedNode: MeshMapSelectedNode?
-	/// A tapped un-splittable coincident stack, shown in a disambiguation picker (nil = hidden).
+	/// A tapped un-splittable cluster, shown in the shared map-item disambiguation picker.
 	@State private var colocatedStack: ColocatedMapStack?
 	/// An item chosen in the picker, opened only after that sheet dismisses (so the two don't collide).
 	@State private var pendingColocatedSelection: MeshMapItem?
@@ -272,6 +272,10 @@ struct MeshMapMK: View {
 			combine(&key, Int64(position.latitudeI))
 			combine(&key, Int64(position.longitudeI))
 			combine(&key, Int64(position.precisionBits))
+			// `lastHeard` itself does not change as a node ages. Include the derived value the
+			// pin renders so the existing refresh cadence rebuilds once it crosses the
+			// online/offline threshold.
+			combine(&key, position.nodePosition?.isOnline == true ? 1 : 0)
 		}
 		return MeshMapVisiblePositionState(positions: positions, key: key)
 	}
@@ -328,7 +332,6 @@ struct MeshMapMK: View {
 				clustering: enableMapClustering,
 				onSelect: { item in presentItemSelection(for: item) },
 				onColocatedStack: { items in
-					// Coincident stack that zoom-to-fit can't separate -> let the user pick an item by name.
 					presentColocatedStack(items)
 				},
 				configuration: clusterConfiguration,
@@ -460,7 +463,10 @@ struct MeshMapMK: View {
 				.sheet(item: $selectedNode) { selection in
 					if let node = getNodeInfo(id: selection.id, context: context) {
 						NavigationStack {
-							NodeDetail(node: node, showMapLink: false)
+							NodeDetail(node: node, showMapLink: false) { userNum in
+								selectedNode = nil
+								router.navigateToDirectMessage(userNum: userNum)
+							}
 						}
 						#if targetEnvironment(macCatalyst)
 							.overlay(alignment: .topLeading) {

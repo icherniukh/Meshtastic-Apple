@@ -177,11 +177,11 @@ struct ClusterMapView<Item: Identifiable, Pin: View, Cluster: View>: UIViewRepre
 	@ViewBuilder let pinContent: (Item) -> Pin
 	/// Builds the SwiftUI cluster badge from the collapsed member count.
 	@ViewBuilder let clusterContent: (Int) -> Cluster
-	/// Called when the user taps an item's pin. (Tapping a cluster zooms to fit its members instead.)
+	/// Called when the user taps an item's pin.
 	let onSelect: ((Item) -> Void)?
-	/// Called when a tapped cluster's members are effectively coincident, so zoom-to-fit can't split
-	/// them (it would just slam to max zoom on a still-merged stack). Hands the members to the caller
-	/// for a disambiguation menu. `nil` = fall back to the normal zoom-to-fit.
+	/// Called when a cluster cannot be split by zooming, either because its members are effectively
+	/// coincident or because MapKit cannot make meaningful progress at the current zoom. Hands the
+	/// members to the caller's disambiguation UI. `nil` = use the normal zoom-to-fit behavior.
 	let onColocatedStack: (([Item]) -> Void)?
 	/// Apple basemap type + map controls. The offline raster overlay (if any) draws on top.
 	let configuration: ClusterMapConfiguration
@@ -379,12 +379,11 @@ struct ClusterMapView<Item: Identifiable, Pin: View, Cluster: View>: UIViewRepre
 		var regionBinding: Binding<MKCoordinateRegion?>?
 		/// Called when an item pin is tapped (set each render).
 		var onSelect: ((Item) -> Void)?
-		/// Called when a tapped cluster is a coincident stack (see `ClusterMapView.onColocatedStack`).
+		/// Called when a cluster cannot be expanded by another meaningful zoom (set each render).
 		var onColocatedStack: (([Item]) -> Void)?
-		/// Members closer than this (max span, meters) can't be visually separated by zooming, so a
-		/// tapped cluster of them is treated as a coincident stack and routed to `onColocatedStack`
-		/// instead of a max-zoom lurch. Single source of truth in `MapColocation.spreadMeters`, shared
-		/// with `MeshMapMK`'s clustering-off pin-tap path.
+		/// Members closer than this (max span, meters) cannot be visually separated by zooming. Single
+		/// source of truth in `MapColocation.spreadMeters`, shared with `MeshMapMK`'s clustering-off
+		/// pin-tap path.
 		static var colocatedSpreadMeters: Double { MapColocation.spreadMeters }
 		/// Empty-map tap / long-press handlers (create waypoint), set each render.
 		var onMapTap: ((CLLocationCoordinate2D) -> Void)?
@@ -442,6 +441,19 @@ struct ClusterMapView<Item: Identifiable, Pin: View, Cluster: View>: UIViewRepre
 		/// id of the last `ClusterMapCameraCommand` we applied, so each command moves the camera once
 		/// and re-renders never re-apply it (the guard that keeps streaming data off the camera).
 		var appliedCameraCommandID: UUID?
+
+		/// A cluster zoom attempt waiting for MapKit's final camera position. MapKit exposes no
+		/// intrinsic "maximum zoom" flag, so compare the achieved visible width with the starting
+		/// width; a no-op/clamped attempt falls back to the member list.
+		private struct PendingClusterExpansion {
+			let id: UUID
+			let items: [Item]
+			let startingVisibleWidth: Double
+			let targetCenter: MKMapPoint
+			var transitionStarted = false
+		}
+		private var pendingClusterExpansion: PendingClusterExpansion?
+		private var clusterExpansionFallback: DispatchWorkItem?
 
 		/// Shared clustering identifier — all clustered item annotations use the same one so MapKit
 		/// groups them. (Computed, not stored: the Coordinator is nested in the generic
@@ -779,46 +791,48 @@ struct ClusterMapView<Item: Identifiable, Pin: View, Cluster: View>: UIViewRepre
 			return nil
 		}
 
-		// MARK: Selection — tap a pin → onSelect; tap a cluster → zoom to fit its members
+		// MARK: Selection — tap a pin → onSelect; tap a cluster → zoom, then list at max zoom
 
 		func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
 			if let cluster = view.annotation as? MKClusterAnnotation {
 				mapView.deselectAnnotation(cluster, animated: false)
-				// Bounding rect of the members' coordinates.
+				let items = cluster.memberAnnotations.compactMap { ($0 as? ItemAnnotation<Item>)?.item }
 				let rect = cluster.memberAnnotations.reduce(MKMapRect.null) { acc, member in
 					acc.union(MKMapRect(origin: MKMapPoint(member.coordinate), size: MKMapSize(width: 0, height: 0)))
 				}
-				// How far apart are the members on the ground? If they're effectively coincident, zooming
-				// to fit can't separate them, so route the members to a disambiguation menu instead.
+				// Effectively coincident members cannot be visually separated by zooming.
 				let metersPerPoint = MKMetersPerMapPointAtLatitude(cluster.coordinate.latitude)
-				// Diagonal (corner-to-corner) of the members' bounding box, so this matches the
-				// CLLocation.distance metric the clustering-off pin path uses: a 4x4 m box is ~5.7 m
-				// across, not 4 m, and shouldn't be treated as an un-splittable coincident stack.
 				let spreadMeters = hypot(rect.size.width, rect.size.height) * metersPerPoint
-				if spreadMeters < Self.colocatedSpreadMeters, let onColocatedStack {
-					let items = cluster.memberAnnotations.compactMap { ($0 as? ItemAnnotation<Item>)?.item }
-					// Only present the picker for a genuine multi-node stack; a lone item (e.g. the rest of
-					// the cluster was non-Item annotations) falls through to the normal zoom-to-fit so we
-					// never show a one-row "Select a Node (1)". Mirrors the clustering-off `count > 1` guard.
-					if items.count > 1 {
-						onColocatedStack(items)
-						return
-					}
+				if spreadMeters < Self.colocatedSpreadMeters, let onColocatedStack, items.count > 1 {
+					onColocatedStack(items)
+					return
 				}
-				// Otherwise expand the cluster: zoom to the bounding rect of its members.
-				if !rect.isNull {
-					// Pad generously so members land well inside the viewport.
-					var padded = rect.insetBy(dx: -max(rect.size.width * 0.8, 1), dy: -max(rect.size.height * 0.8, 1))
-					// Floor the span (~140 m) so a TIGHT cluster still zooms in to a readable street
-					// level instead of an imperceptible nudge — otherwise a stubborn "2" never breaks.
-					let pointsPerMeter = MKMapPointsPerMeterAtLatitude(cluster.coordinate.latitude)
-					let minSpan = 140.0 * pointsPerMeter
-					if padded.size.width < minSpan || padded.size.height < minSpan {
-						let span = max(minSpan, max(padded.size.width, padded.size.height))
-						padded = MKMapRect(x: padded.midX - span / 2, y: padded.midY - span / 2, width: span, height: span)
-					}
-					mapView.setVisibleMapRect(padded, animated: true)
+				guard !rect.isNull else { return }
+
+				// Preserve the readable street-level target for tight, non-coincident clusters.
+				var padded = rect.insetBy(dx: -max(rect.size.width * 0.8, 1), dy: -max(rect.size.height * 0.8, 1))
+				let pointsPerMeter = MKMapPointsPerMeterAtLatitude(cluster.coordinate.latitude)
+				let minSpan = 140.0 * pointsPerMeter
+				if padded.size.width < minSpan || padded.size.height < minSpan {
+					let span = max(minSpan, max(padded.size.width, padded.size.height))
+					padded = MKMapRect(x: padded.midX - span / 2, y: padded.midY - span / 2, width: span, height: span)
 				}
+
+				let currentWidth = mapView.visibleMapRect.size.width
+				let fittedWidth = mapView.mapRectThatFits(padded).size.width
+				if let onColocatedStack, items.count > 1,
+				   !Self.isMeaningfulZoom(from: currentWidth, to: fittedWidth) {
+					cancelPendingClusterExpansion()
+					onColocatedStack(items)
+					return
+				}
+				beginClusterExpansion(
+					items: items,
+					fromVisibleWidth: currentWidth,
+					targetCenter: MKMapPoint(x: padded.midX, y: padded.midY),
+					on: mapView
+				)
+				mapView.setVisibleMapRect(padded, animated: true)
 				return
 			}
 			if let deco = view.annotation as? DecorationAnnotation {
@@ -892,12 +906,27 @@ struct ClusterMapView<Item: Identifiable, Pin: View, Cluster: View>: UIViewRepre
 
 		// MARK: Camera write-back (user gestures → region binding), loop-guarded
 
+		func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+			// beginClusterExpansion is installed immediately before setVisibleMapRect. Seeing this
+			// callback proves a later regionDidChange belongs to that requested transition rather
+			// than to an older camera animation that happened to end at the same center.
+			pendingClusterExpansion?.transitionStarted = true
+		}
+
 		func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-			// Ignore the callback caused by our own external write (guard #1).
+			// Ignore the callback caused by our own external write (guard #1). Resolve this before a
+			// cluster attempt so an older camera command cannot masquerade as the cluster transition.
 			guard !isApplyingExternalRegion else {
 				isApplyingExternalRegion = false
 				return
 			}
+
+			// A clamped/no-op cluster zoom reveals the member list instead of leaving an opaque
+			// cluster at maximum zoom. The timeout handles the case where MapKit emits no callbacks.
+			if pendingClusterExpansion?.transitionStarted == true {
+				finishPendingClusterExpansion(on: mapView, cancelIfNotAtTarget: false)
+			}
+
 			// Caller is driving the camera (e.g. a flyover) — don't write the binding / re-render.
 			guard !suppressRegionUpdates else { return }
 			guard let regionBinding else { return }
@@ -911,6 +940,69 @@ struct ClusterMapView<Item: Identifiable, Pin: View, Cluster: View>: UIViewRepre
 		}
 
 		// MARK: Helpers
+
+		private func beginClusterExpansion(
+			items: [Item],
+			fromVisibleWidth width: Double,
+			targetCenter: MKMapPoint,
+			on mapView: MKMapView
+		) {
+			cancelPendingClusterExpansion()
+			guard onColocatedStack != nil, !items.isEmpty else { return }
+			let pending = PendingClusterExpansion(
+				id: UUID(),
+				items: items,
+				startingVisibleWidth: width,
+				targetCenter: targetCenter
+			)
+			pendingClusterExpansion = pending
+
+			// MapKit may omit regionDidChangeAnimated for a fully clamped no-op. Resolve that case
+			// after the normal animation window; the id prevents an older attempt from winning a race.
+			let fallback = DispatchWorkItem { [weak self, weak mapView] in
+				guard let self, let mapView, self.pendingClusterExpansion?.id == pending.id else { return }
+				self.finishPendingClusterExpansion(on: mapView, cancelIfNotAtTarget: true)
+			}
+			clusterExpansionFallback = fallback
+			DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: fallback)
+		}
+
+		private func finishPendingClusterExpansion(on mapView: MKMapView, cancelIfNotAtTarget: Bool) {
+			guard let pending = pendingClusterExpansion else { return }
+			let visibleRect = mapView.visibleMapRect
+			let finalWidth = visibleRect.size.width
+
+			// Any real zoom-in accomplished the normal cluster behavior. A zoom-out means the user
+			// interrupted us; it must not be mistaken for a max-zoom no-op.
+			if Self.isMeaningfulZoom(from: pending.startingVisibleWidth, to: finalWidth) ||
+			   finalWidth > pending.startingVisibleWidth * 1.02 {
+				cancelPendingClusterExpansion()
+				return
+			}
+
+			// regionDidChangeAnimated can belong to an already-running gesture or another camera
+			// command. Only reveal members once our requested center has actually settled.
+			let finalCenter = MKMapPoint(x: visibleRect.midX, y: visibleRect.midY)
+			let tolerance = max(visibleRect.size.width, visibleRect.size.height) * 0.02
+			let reachedTarget = hypot(finalCenter.x - pending.targetCenter.x, finalCenter.y - pending.targetCenter.y) <= tolerance
+			guard reachedTarget else {
+				if cancelIfNotAtTarget { cancelPendingClusterExpansion() }
+				return
+			}
+
+			cancelPendingClusterExpansion()
+			onColocatedStack?(pending.items)
+		}
+
+		private func cancelPendingClusterExpansion() {
+			pendingClusterExpansion = nil
+			clusterExpansionFallback?.cancel()
+			clusterExpansionFallback = nil
+		}
+
+		private static func isMeaningfulZoom(from startingWidth: Double, to finalWidth: Double) -> Bool {
+			startingWidth.isFinite && finalWidth.isFinite && startingWidth > 0 && finalWidth < startingWidth * 0.98
+		}
 
 		static func coordinatesEqual(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Bool {
 			// ~1e-7° (~1 cm) is below MapKit's display resolution — don't churn on float noise.
