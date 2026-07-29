@@ -17,6 +17,13 @@ struct UpdateIntervalPicker: View {
 		config.allowedCases
 			.map { UpdateInterval(from: $0.rawValue) }
 	}
+
+	private var pickerOptions: [UpdateInterval] {
+		if fixedOptions.contains(selectedInterval) {
+			return fixedOptions
+		}
+		return [selectedInterval] + fixedOptions
+	}
 	
 	init(config: IntervalConfiguration, pickerLabel: String, selectedInterval: Binding<UpdateInterval>) {
 		self.config = config
@@ -30,7 +37,7 @@ struct UpdateIntervalPicker: View {
 	var body: some View {
 		VStack(alignment: .leading, spacing: 4) {
 			Picker(pickerLabel, selection: $selectedInterval) {
-				ForEach(fixedOptions, id: \.self) { interval in
+				ForEach(pickerOptions, id: \.self) { interval in
 					Text(interval.description)
 						.tag(interval)
 				}

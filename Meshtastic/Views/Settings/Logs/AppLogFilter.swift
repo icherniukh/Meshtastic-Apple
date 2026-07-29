@@ -122,7 +122,6 @@ enum LogLevels: Int, CaseIterable, Identifiable {
 struct AppLogFilter: View {
 
 	@Environment(\.dismiss) private var dismiss
-	@State private var currentDetent = PresentationDetent.medium
 	/// Filters
 	var filterTitle = "App Log Filters"
 	@Binding var categories: Set<Int>
@@ -210,7 +209,7 @@ struct AppLogFilter: View {
 			.padding(.leading, 14)
 		}
 		#endif
-		.presentationDetents([.large], selection: $currentDetent)
+		.presentationDetents([.large])
 		.presentationContentInteraction(.scrolls)
 		#if !targetEnvironment(macCatalyst)
 		.presentationDragIndicator(.visible)

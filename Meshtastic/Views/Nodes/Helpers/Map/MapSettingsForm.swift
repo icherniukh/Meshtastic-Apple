@@ -12,7 +12,6 @@ import UniformTypeIdentifiers
 
 struct MapSettingsForm: View {
 	@Environment(\.dismiss) private var dismiss
-	@State private var currentDetent = PresentationDetent.medium
 	@State private var isShowingFilePicker = false
 	@State private var isProcessingUpload = false
 	@State private var showUploadError = false
@@ -325,7 +324,7 @@ struct MapSettingsForm: View {
 			.padding(.leading, 14)
 		}
 		#endif
-		.presentationDetents([.large], selection: $currentDetent)
+		.presentationDetents([.large])
 		.presentationContentInteraction(.scrolls)
 		#if !targetEnvironment(macCatalyst)
 		.presentationDragIndicator(.visible)
