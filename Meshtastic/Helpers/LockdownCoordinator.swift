@@ -65,7 +65,7 @@ final class LockdownCoordinator: ObservableObject {
 
 	private weak var sender: LockdownSender?
 	private let store: LockdownPassphraseStoring
-	private let logger = Logger(subsystem: "gvh.MeshtasticClient", category: "Lockdown")
+	private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "gvh.MeshtasticClient", category: "Lockdown")
 
 	// MARK: Internal per-connection flags
 

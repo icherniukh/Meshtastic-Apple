@@ -20,7 +20,7 @@ final class WatchSessionManager: NSObject, ObservableObject {
 
 	static let shared = WatchSessionManager()
 
-	private let logger = Logger(subsystem: "gvh.MeshtasticClient", category: "⌚ Watch")
+	private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "gvh.MeshtasticClient", category: "⌚ Watch")
 	private var session: WCSession?
 	private var watchUpdateTask: Task<Void, Never>?
 	private var lastWatchSendTime: Date = .distantPast
