@@ -157,6 +157,9 @@ struct TextMessageField: View {
 	}
 
 	private func sendMessage() {
+		let shouldSendPosition = sendPositionWithMessage
+		sendPositionWithMessage = false
+
 		Task {
 			do {
 				try await accessoryManager.sendMessage(
@@ -170,7 +173,7 @@ struct TextMessageField: View {
 				isFocused = false
 				replyMessageId = 0
 
-				if sendPositionWithMessage {
+				if shouldSendPosition {
 					try await accessoryManager.sendPosition(
 						channel: destination.channelNum,
 						destNum: destination.positionDestNum,
