@@ -340,6 +340,18 @@ struct MessageAckStatusRefreshTests {
 		#expect(status.canRetry == true)
 	}
 
+	@Test func deliveryStatus_localRadioWriteFailureIsRetryableAndNotAMeshFailure() throws {
+		let msg = try insertChannelMessage(channelIndex: 7_710, messageId: 970_100_010)
+		msg.ackError = MessageEntity.localRadioWriteFailure
+		try context.save()
+
+		let status = msg.deliveryStatus(isDirectMessage: false)
+
+		#expect(status.text == "Could not send to radio")
+		#expect(status.detail == "The message was not accepted by the connected radio. Try again after reconnecting.")
+		#expect(status.canRetry == true)
+	}
+
 	@Test func deliveryStatus_permanentFailuresDoNotOfferRetry() throws {
 		let noChannel = MessageEntity()
 		noChannel.ackError = Int32(RoutingError.noChannel.rawValue)

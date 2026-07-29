@@ -13,6 +13,9 @@ import MeshtasticProtobufs
 import SwiftUI
 
 extension MessageEntity {
+	/// A local transport error, distinct from the positive values emitted by the mesh routing protocol.
+	static let localRadioWriteFailure: Int32 = -1
+
 	var hasTranslatedPayload: Bool {
 		!(messagePayloadTranslated?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
 	}
@@ -37,6 +40,9 @@ extension MessageEntity {
 	}
 
 	var canRetry: Bool {
+		if ackError == Self.localRadioWriteFailure {
+			return true
+		}
 		let re = RoutingError(rawValue: Int(ackError))
 		return re?.canRetry ?? false
 	}
@@ -50,6 +56,10 @@ extension MessageEntity {
 		}
 
 		guard ackError != 0 else { return .sending }
+
+		if ackError == Self.localRadioWriteFailure {
+			return .radioWriteFailed
+		}
 
 		if let routingError = RoutingError(rawValue: Int(ackError)) {
 			return .failed(routingError)

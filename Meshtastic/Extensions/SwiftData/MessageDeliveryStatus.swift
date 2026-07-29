@@ -15,6 +15,14 @@ struct MessageDeliveryStatus {
 		canRetry: false
 	)
 
+	static let radioWriteFailed = MessageDeliveryStatus(
+		text: "Could not send to radio".localized,
+		detail: "The message was not accepted by the connected radio. Try again after reconnecting.".localized,
+		systemImage: "exclamationmark.circle.fill",
+		color: Color(uiColor: .systemOrange),
+		canRetry: true
+	)
+
 	static let deliveredToMesh = MessageDeliveryStatus(
 		text: "Delivered to mesh".localized,
 		detail: "A node on the mesh confirmed this message.".localized,

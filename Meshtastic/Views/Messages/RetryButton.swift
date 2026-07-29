@@ -2,7 +2,6 @@ import SwiftUI
 import OSLog
 
 struct RetryButton: View {
-	@Environment(\.modelContext) private var context
 	@EnvironmentObject var accessoryManager: AccessoryManager
 
 	let message: MessageEntity
@@ -54,16 +53,10 @@ struct RetryButton: View {
 		let channel = message.channel
 		let isEmoji = message.isEmoji
 		let replyID = message.replyID
-		context.delete(message)
-		do {
-			try context.save()
-		} catch {
-			Logger.data.error("Failed to delete message \(messageID, privacy: .public): \(error.localizedDescription, privacy: .public)")
-		}
 		Task {
 			do {
 				try await accessoryManager.sendMessage(message: payload, toUserNum: userNum, channel: channel,
-													   isEmoji: isEmoji, replyID: replyID)
+												   isEmoji: isEmoji, replyID: replyID, retrying: message)
 				if case .channel = destination {
 					await MainActor.run { onMessageSent?() }
 				}

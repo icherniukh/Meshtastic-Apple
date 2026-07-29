@@ -275,7 +275,14 @@ extension AccessoryManager {
 		try await sendAdminMessageToRadio(meshPacket: meshPacket, adminDescription: messageDescription)
 	}
 
-	public func sendMessage(message: String, toUserNum: Int64, channel: Int32, isEmoji: Bool, replyID: Int64) async throws {
+	public func sendMessage(
+		message: String,
+		toUserNum: Int64,
+		channel: Int32,
+		isEmoji: Bool,
+		replyID: Int64,
+		retrying failedMessage: MessageEntity? = nil
+	) async throws {
 		guard let fromUserNum = self.activeConnection?.device.num else {
 			Logger.services.error("Error while sending CannedMessageModule request.  No active device.")
 			throw AccessoryError.ioFailed("No active device")
@@ -296,30 +303,34 @@ extension AccessoryManager {
 					Logger.data.error("🚫 Message Users Not Found, Fail")
 					throw AccessoryError.ioFailed("🚫 Message Users Not Found, Fail")
 				} else if fetchedUsers.count >= 1 {
-					let newMessage = MessageEntity()
-					context.insert(newMessage)
-					newMessage.messageId = Int64(UInt32.random(in: UInt32(UInt8.max)..<UInt32.max))
-					newMessage.messageTimestamp =  Int32(Date().timeIntervalSince1970)
-					newMessage.receivedACK = false
-					newMessage.read = true
-					if toUserNum > 0 {
-						newMessage.toUser = fetchedUsers.first(where: { $0.num == toUserNum })
-						newMessage.toUser?.lastMessage = Date()
-						if newMessage.toUser?.pkiEncrypted ?? false {
-							newMessage.publicKey = newMessage.toUser?.publicKey
-							newMessage.pkiEncrypted = true
+					let newMessage = failedMessage ?? MessageEntity()
+					let packetID = Int64(UInt32.random(in: UInt32(UInt8.max)..<UInt32.max))
+					let isRetry = failedMessage != nil
+					if !isRetry {
+						context.insert(newMessage)
+						newMessage.messageId = packetID
+						newMessage.messageTimestamp = Int32(Date().timeIntervalSince1970)
+						newMessage.receivedACK = false
+						newMessage.read = true
+						if toUserNum > 0 {
+							newMessage.toUser = fetchedUsers.first(where: { $0.num == toUserNum })
+							if newMessage.toUser?.pkiEncrypted ?? false {
+								newMessage.publicKey = newMessage.toUser?.publicKey
+								newMessage.pkiEncrypted = true
+							}
 						}
+						newMessage.fromUser = fetchedUsers.first(where: { $0.num == fromUserNum })
+						newMessage.isEmoji = isEmoji
+						newMessage.admin = false
+						newMessage.channel = channel
+						if replyID > 0 {
+							newMessage.replyID = replyID
+						}
+						newMessage.messagePayload = message
+						newMessage.messagePayloadMarkdown = generateMessageMarkdown(message: message)
+						newMessage.read = true
+						try context.save()
 					}
-					newMessage.fromUser = fetchedUsers.first(where: { $0.num == fromUserNum })
-					newMessage.isEmoji = isEmoji
-					newMessage.admin = false
-					newMessage.channel = channel
-					if replyID > 0 {
-						newMessage.replyID = replyID
-					}
-					newMessage.messagePayload = message
-					newMessage.messagePayloadMarkdown = generateMessageMarkdown(message: message)
-					newMessage.read = true
 
 					let dataType = PortNum.textMessageApp
 					var messageQuotesReplaced = message.replacingOccurrences(of: "’", with: "'")
@@ -334,26 +345,29 @@ extension AccessoryManager {
 					if newMessage.toUser?.pkiEncrypted ?? false {
 						meshPacket.pkiEncrypted = true
 						meshPacket.publicKey = newMessage.toUser?.publicKey ?? Data()
-						// Send a contact to the phone every time we send a dm so that any nodes that have rolled out of the db are there and we don't get a PKI Failed error
-						Task { @MainActor in
-							let am = AccessoryManager.shared
-							if let user = newMessage.toUser {
-								var contact = SharedContact()
-								contact.manuallyVerified = false
-								contact.nodeNum = UInt32(truncatingIfNeeded: user.num)
-								user.userNode?.favorite = user.userNode?.deviceConfig?.role ?? 0 != DeviceRoles.clientBase.rawValue
-								contact.user = user.toProto()
+						// Refresh the radio's contact before the DM. This used to run in an unstructured
+						// Task, allowing the encrypted message to overtake the contact update and return
+						// PKI_UNKNOWN_PUBKEY / PKI_FAILED even when the app had the recipient's key.
+						if let user = newMessage.toUser {
+							var contact = SharedContact()
+							contact.manuallyVerified = false
+							contact.nodeNum = UInt32(truncatingIfNeeded: user.num)
+							user.userNode?.favorite = user.userNode?.deviceConfig?.role ?? 0 != DeviceRoles.clientBase.rawValue
+							contact.user = user.toProto()
+							do {
+								let contactString = try contact.serializedData().base64EncodedString()
 								do {
-									let contactString = try contact.serializedData().base64EncodedString()
-									try? await am.addContactFromURL(base64UrlString: contactString)
-									try context.save()
+									try await addContactFromURL(base64UrlString: contactString)
 								} catch {
-									Logger.services.error("Error inserting new contact and resending encrypted send failed message: \(error)")
+									Logger.mesh.warning("🔑 Recipient contact refresh failed before DM id=\(packetID, privacy: .public) to=\(toUserNum.toHex(), privacy: .public) recipientKeyBytes=\(user.publicKey?.count ?? 0, privacy: .public): \(error.localizedDescription, privacy: .public)")
 								}
+								try context.save()
+							} catch {
+								Logger.services.error("Error preparing recipient contact before encrypted message id=\(packetID, privacy: .public) to=\(toUserNum.toHex(), privacy: .public): \(error.localizedDescription, privacy: .public)")
 							}
 						}
 					}
-					meshPacket.id = UInt32(newMessage.messageId)
+					meshPacket.id = UInt32(packetID)
 					if toUserNum > 0 {
 						meshPacket.to = UInt32(toUserNum)
 						let hopsAway = newMessage.toUser?.userNode?.hopsAway ?? 0
@@ -375,13 +389,37 @@ extension AccessoryManager {
 					var toRadio: ToRadio!
 					toRadio = ToRadio()
 					toRadio.packet = meshPacket
-					Task {
-						let logString = String.localizedStringWithFormat("Sent message %@ from %@ to %@".localized, String(newMessage.messageId), fromUserNum.toHex(), toUserNum.toHex())
-						try await send(toRadio, debugDescription: logString)
-						Logger.mesh.info("💬 \(logString, privacy: .public)")
+					let logString = String.localizedStringWithFormat("Sent message %@ from %@ to %@".localized, String(packetID), fromUserNum.toHex(), toUserNum.toHex())
+					let senderKeyBytes = newMessage.fromUser?.publicKey?.count ?? 0
+					let recipientKeyBytes = newMessage.toUser?.publicKey?.count ?? 0
+					let recipientKeyMatch = newMessage.toUser?.keyMatch ?? true
+					let sendContext = "messageId=\(packetID) packetId=\(meshPacket.id) from=\(fromUserNum.toHex()) to=\(toUserNum.toHex()) channel=\(channel) wantAck=\(meshPacket.wantAck) pki=\(meshPacket.pkiEncrypted) senderKeyBytes=\(senderKeyBytes) recipientKeyBytes=\(recipientKeyBytes) recipientKeyMatch=\(recipientKeyMatch) replyId=\(replyID)"
+					if meshPacket.pkiEncrypted && recipientKeyBytes != 32 {
+						Logger.mesh.warning("🔑 Sending encrypted DM with invalid recipient key length: \(sendContext, privacy: .public)")
 					}
 					do {
+						try await send(toRadio, debugDescription: logString)
+					} catch {
+						if !isRetry {
+							newMessage.ackError = MessageEntity.localRadioWriteFailure
+							try? context.save()
+						}
+						Logger.mesh.error("💥 Radio send failed \(sendContext, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+						throw error
+					}
+
+					if isRetry {
+						newMessage.messageId = packetID
+						newMessage.messageTimestamp = Int32(Date().timeIntervalSince1970)
+						newMessage.ackError = 0
+						newMessage.receivedACK = false
+						newMessage.realACK = false
+					}
+					newMessage.toUser?.lastMessage = Date()
+
+					do {
 						try context.save()
+						Logger.mesh.info("💬 \(logString, privacy: .public) \(sendContext, privacy: .public)")
 						Logger.data.info("💾 Saved a new sent message from \(self.activeDeviceNum?.toHex() ?? "0", privacy: .public) to \(toUserNum.toHex(), privacy: .public)")
 						// Donate outgoing message to SiriKit for CarPlay
 						// (CarPlay is iPhone-only, so skip on Mac Catalyst).
@@ -397,7 +435,8 @@ extension AccessoryManager {
 					}
 				}
 			} catch {
-				Logger.data.error("💥 Send message failure \(self.activeDeviceNum?.toHex() ?? "0", privacy: .public) to \(toUserNum.toHex(), privacy: .public)")
+				Logger.data.error("💥 Send message preparation failure from \(self.activeDeviceNum?.toHex() ?? "0", privacy: .public) to \(toUserNum.toHex(), privacy: .public) channel=\(channel, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+				throw error
 			}
 
 	}
