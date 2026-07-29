@@ -191,6 +191,16 @@ class Router: ObservableObject {
 		selectedNodeNum = nodeNum
 	}
 
+	/// Opens one direct-message conversation without an external URL round trip. Install the
+	/// destination command before switching tabs so the retained Messages view can resolve the
+	/// selection even when this is triggered while dismissing a sheet or navigation destination.
+	func navigateToDirectMessage(userNum: Int64) {
+		Logger.services.info("🛣 [App] Direct route to message user \(userNum, privacy: .public)")
+		messagesSection = .directMessages()
+		messagesState = .directMessages(userNum: userNum)
+		selectedTab = .messages
+	}
+
 	func popToRoot(tab: NavigationState.Tab) {
 		switch tab {
 		case .messages:

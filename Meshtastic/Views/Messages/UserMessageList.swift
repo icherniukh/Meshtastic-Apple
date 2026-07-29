@@ -548,7 +548,9 @@ struct UserMessageList: View {
 								.foregroundStyle(.secondary)
 								.font(.caption2)
 						}
-						Link(destination: URL(string: "meshtastic:///nodes?nodenum=\(user.num)")!) {
+						Button {
+							appState.router.navigateToNodeDetail(nodeNum: user.num)
+						} label: {
 							Text("Details...")
 								.font(.caption2)
 								.offset(y: -15)

@@ -9,6 +9,7 @@ import CoreLocation
 import OSLog
 @preconcurrency import SwiftData
 import Foundation
+import UIKit
 
 struct NodeList: View {
 	@Environment(\.modelContext) private var context
@@ -271,6 +272,14 @@ private struct FilteredNodeList: View {
 	/// full-node-set scan per packet, even while the Nodes tab was off-screen (TabView keeps
 	/// tabs alive). Simple filters are pushed into the predicate to reduce in-memory work.
 	private func makeNodeFetchDescriptor() -> FetchDescriptor<NodeInfoEntity> {
+		// An explicit text search is a database-wide lookup. Applying the normal predicate first
+		// made a known node impossible to find whenever a persisted filter hid it.
+		if !filters.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+			return FetchDescriptor<NodeInfoEntity>(
+				sortBy: [SortDescriptor(\NodeInfoEntity.lastHeard, order: .reverse)]
+			)
+		}
+
 		let showIgnored = filters.isIgnored
 		let showFavorite = filters.isFavorite
 		let filterViaLoraOnly = filters.viaLora && !filters.viaMqtt
@@ -301,12 +310,13 @@ private struct FilteredNodeList: View {
 
 	private func displayNodes(from allNodes: [NodeInfoEntity], activeNodeNum: Int64?) -> [NodeListEntry] {
 		let searchText = filters.searchText.lowercased()
-		let onlineThreshold = filters.isOnline ? Date().addingTimeInterval(-7_200) : nil
-		let distanceBounds = filters.currentDistanceBounds
+		let isSearching = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+		let onlineThreshold = !isSearching && filters.isOnline ? Date().addingTimeInterval(-7_200) : nil
+		let distanceBounds = isSearching ? nil : filters.currentDistanceBounds
 		let filterLookup = NodeListFilterLookup(
 			nodes: allNodes,
-			needsEnvironment: filters.isEnvironment,
-			distanceBounds: filters.distanceFilter ? distanceBounds : nil,
+			needsEnvironment: !isSearching && filters.isEnvironment,
+			distanceBounds: !isSearching && filters.distanceFilter ? distanceBounds : nil,
 			context: context
 		)
 		var seenNodeNums = Set<Int64>()
@@ -385,6 +395,11 @@ private struct FilteredNodeList: View {
 				}
 			}
 		}
+		.overlay {
+			if displayedNodes.isEmpty && !filters.searchText.isEmpty {
+				searchEmptyState
+			}
+		}
 		.navigationTitle(String.localizedStringWithFormat("Nodes (%@)".localized, String(displayedNodes.count)))
 		.task(id: router.selectedTab) {
 			// Recompute the displayed list on a gentle cadence instead of inside `body`.
@@ -409,6 +424,59 @@ private struct FilteredNodeList: View {
 		router.updateNodeIndex(from: allNodes)
 	}
 
+	// MARK: - Search empty state (blind Node Watch subscribe)
+
+	/// True once `filters.searchText` has been resolved this render to a watchable id/suffix
+	/// and that target is already actively watched. Recomputed via `.task(id:)` below so it
+	/// reflects `UserDefaults` writes from the button in `searchEmptyState`, which aren't
+	/// otherwise observed by SwiftUI.
+	@State private var searchWatchActive = false
+
+	@ViewBuilder
+	private var searchEmptyState: some View {
+		if let target = NodeWatchIdentifier.watchTarget(for: filters.searchText) {
+			Group {
+				if searchWatchActive {
+					// Distinct icon/title from the "not subscribed yet" state below, plus a
+					// success haptic on the transition into this state -- a description-text-only
+					// change read as "nothing happened" when tapping Notify.
+					ContentUnavailableView {
+						Label(String(format: "Subscribed to '%@'".localized, filters.searchText), systemImage: "checkmark.circle.fill")
+					} description: {
+						Text("You'll get notified when this appears on the mesh.".localized)
+					} actions: {
+						Button {
+							NodeWatchIdentifier.unwatch(target: target)
+							searchWatchActive = false
+						} label: {
+							Label("Unsubscribe".localized, systemImage: "bell.slash")
+						}
+					}
+				} else {
+					ContentUnavailableView {
+						Label("No Matching Nodes", systemImage: "person.fill.questionmark")
+					} description: {
+						Text(String(format: "No known node matches '%@'.".localized, filters.searchText))
+					} actions: {
+						Button {
+							NodeWatchIdentifier.watch(target: target)
+							searchWatchActive = true
+							UINotificationFeedbackGenerator().notificationOccurred(.success)
+						} label: {
+							Label(String(format: "Notify me when '%@' appears".localized, filters.searchText), systemImage: "bell.badge")
+						}
+						.accessibilityHint("Sends a notification when this id appears on the mesh, even if it hasn't been seen yet.".localized)
+					}
+				}
+			}
+			.task(id: filters.searchText) {
+				searchWatchActive = NodeWatchIdentifier.isActive(target: target)
+			}
+		} else {
+			ContentUnavailableView.search(text: filters.searchText)
+		}
+	}
+
 	@ViewBuilder
 	func contextMenuActions(
 		node: NodeInfoEntity,
@@ -425,15 +493,13 @@ private struct FilteredNodeList: View {
 		if let connectedNode {
 			FavoriteNodeButton(node: node)
 			if let user = node.user {
-				NodeAlertsButton(context: context, node: node, user: user)
+				NodeAlertsButton(context: context, node: node, user: user, showsPresenceToggle: connectedNode.num != node.num)
 			}
 			if connectedNode.num != node.num {
 				if !(node.user?.unmessagable ?? true) {
-					Button(action: {
-						if let url = URL(string: "meshtastic:///messages?userNum=\(node.num)") {
-							UIApplication.shared.open(url)
-						}
-					}) {
+					Button {
+						router.navigateToDirectMessage(userNum: node.num)
+					} label: {
 						Label("Message", systemImage: "message")
 					}
 				}
@@ -558,17 +624,19 @@ fileprivate extension NodeFilterParameters {
 		distanceBounds: NodeDistanceFilterBounds?,
 		lookup: NodeListFilterLookup
 	) -> Bool {
-		// Search text (requires relationship traversal)
-		if !normalizedSearchText.isEmpty {
-			let matchesSearch = [
+		// Search is intentionally independent of all normal filters, including ignored status.
+		// Clearing the search restores the user's previous filter configuration unchanged.
+		let text = normalizedSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+		if !text.isEmpty {
+			return [
 				node.user?.userId,
 				node.user?.numString,
 				node.user?.hwModel,
 				node.user?.hwDisplayName,
 				node.user?.longName,
-				node.user?.shortName
-			].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(normalizedSearchText) }
-			if !matchesSearch { return false }
+				node.user?.shortName,
+				String(node.num)
+			].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(text) }
 		}
 
 		// Role filter (requires relationship traversal)
@@ -602,6 +670,10 @@ fileprivate extension NodeFilterParameters {
 				return false
 			}
 		}
+
+		// Node Watch filters (meshtastic-apple-1ei.10/.26)
+		if isSubscribed && !NodeWatchIdentifier.isWatched(node.num) { return false }
+		if isUnsubscribed && !NodeWatchIdentifier.isInHistory(node.num) { return false }
 
 		return true
 	}

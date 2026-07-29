@@ -283,7 +283,35 @@ extension MeshPackets {
 			if let node = try modelContext.fetch(descriptor).first {
 				node.id = Int64(packet.from)
 				node.num = Int64(packet.from)
-				
+
+				// Node Watch: detect offline→online transition for watched nodes before updating lastHeard.
+				if !isImplicitAck && NodeWatchIdentifier.isWatched(Int64(packet.from)) {
+					let wasOffline: Bool
+					if let prev = node.lastHeard {
+						wasOffline = prev.timeIntervalSinceNow < -7200
+					} else {
+						wasOffline = true
+					}
+					if wasOffline {
+						NodeWatchIdentifier.promoteSuffixMatch(for: Int64(packet.from))
+						let name = node.user?.longName ?? packet.from.toHex()
+						Task { @MainActor in
+							let manager = LocalNotificationManager()
+							manager.notifications = [
+								Notification(
+									id: "nodewatch.\(packet.from).\(packet.rxTime)",
+									title: "📍 \(name)",
+									subtitle: "Node Alert",
+									content: "Back online and reachable.".localized,
+									target: "nodes",
+									path: "meshtastic:///nodes?nodenum=\(packet.from)"
+								)
+							]
+							manager.schedule()
+						}
+					}
+				}
+
 				// Single source of truth for lastHeard on received packets: this runs for
 				// every packet (mirroring firmware NodeDB::updateFrom), so the per-packet
 				// handlers no longer touch lastHeard for remote nodes.
@@ -496,7 +524,27 @@ extension MeshPackets {
 						return
 					}
 				}
-				
+
+				// Node Watch: notify if this newly-discovered node is on the watch list.
+				if NodeWatchIdentifier.isWatched(Int64(packet.from)) {
+					NodeWatchIdentifier.promoteSuffixMatch(for: Int64(packet.from))
+					let name = newNode.user?.longName ?? packet.from.toHex()
+					Task { @MainActor in
+						let manager = LocalNotificationManager()
+						manager.notifications = [
+							Notification(
+								id: "nodewatch.new.\(packet.from).\(packet.rxTime)",
+								title: "📍 \(name)",
+								subtitle: "Node Alert",
+								content: "Just appeared on the mesh.".localized,
+								target: "nodes",
+								path: "meshtastic:///nodes?nodenum=\(packet.from)"
+							)
+						]
+						manager.schedule()
+					}
+				}
+
 				// Over-the-mesh ingestion is high-frequency, so debounce; local actions
 				// (e.g. adding a contact / favoriting) persist immediately for snappy UI.
 				if overTheMesh { scheduleDebouncedSave() } else { savePendingChanges() }

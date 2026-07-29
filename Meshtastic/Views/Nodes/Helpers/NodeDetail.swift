@@ -36,6 +36,7 @@ struct NodeDetail: View {
 		rawValue: UserDefaults.modemPreset
 	) ?? ModemPresets.longFast
 	@Environment(\.modelContext) private var context
+	@Environment(\.dismiss) private var dismiss
 	@EnvironmentObject var accessoryManager: AccessoryManager
 	@EnvironmentObject var router: Router
 	@State private var showingShutdownConfirm: Bool = false
@@ -43,6 +44,9 @@ struct NodeDetail: View {
 	@State private var dateFormatRelative: Bool = true
 	@Bindable	var node: NodeInfoEntity
 	var showMapLink: Bool = true
+	/// Presentation owners such as the map's cluster sheet can dismiss their entire container
+	/// before routing. Other entry points use the local dismiss action.
+	var onMessage: ((Int64) -> Void)? = nil
 	@State private var latestPosition: PositionEntity?
 	@State private var latestDeviceMetrics: TelemetryEntity?
 	@State private var latestEnvironmentMetrics: TelemetryEntity?
@@ -71,6 +75,15 @@ struct NodeDetail: View {
 	/// NodeDisplayNameStore is plain UserDefaults, not a SwiftData/@Bindable property, so nothing
 	/// else here would pick up the change.
 	@State private var displayNameRefresh = 0
+
+	private func openDirectMessage() {
+		if let onMessage {
+			onMessage(node.num)
+		} else {
+			dismiss()
+			router.navigateToDirectMessage(userNum: node.num)
+		}
+	}
 
 	var body: some View {
 		if node.modelContext != nil {
@@ -705,7 +718,8 @@ struct NodeDetail: View {
 				NodeAlertsButton(
 					context: context,
 					node: node,
-					user: user
+					user: user,
+					showsPresenceToggle: connectedNode != nil && connectedNode?.num != node.num
 				)
 				if ShareContactQR.canShareContact(for: node) {
 					Button {
@@ -721,11 +735,7 @@ struct NodeDetail: View {
 				)
 				if connectedNode.num != node.num {
 					if !(node.user?.unmessagable ?? true) {
-						Button(action: {
-							if let url = URL(string: "meshtastic:///messages?userNum=\(node.num)") {
-								UIApplication.shared.open(url)
-							}
-						}) {
+						Button(action: openDirectMessage) {
 							Label("Message", systemImage: "message")
 						}
 					}

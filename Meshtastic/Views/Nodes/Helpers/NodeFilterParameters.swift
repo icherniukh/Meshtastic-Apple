@@ -75,6 +75,8 @@ final class NodeFilterParameters: ObservableObject {
 		static let isOnline = "nodeFilter.isOnline"
 		static let isPkiEncrypted = "nodeFilter.isPkiEncrypted"
 		static let isFavorite = "nodeFilter.isFavorite"
+		static let isSubscribed = "nodeFilter.isSubscribed"
+		static let isUnsubscribed = "nodeFilter.isUnsubscribed"
 		static let isIgnored = "nodeFilter.isIgnored"
 		static let isEnvironment = "nodeFilter.isEnvironment"
 		static let distanceFilter = "nodeFilter.distanceFilter"
@@ -96,6 +98,10 @@ final class NodeFilterParameters: ObservableObject {
 	@Published var isOnline: Bool { didSet { store.set(isOnline, forKey: Keys.isOnline) } }
 	@Published var isPkiEncrypted: Bool { didSet { store.set(isPkiEncrypted, forKey: Keys.isPkiEncrypted) } }
 	@Published var isFavorite: Bool { didSet { store.set(isFavorite, forKey: Keys.isFavorite) } }
+	/// Node Watch (meshtastic-apple-1ei.10/.26): show only actively subscribed nodes.
+	@Published var isSubscribed: Bool { didSet { store.set(isSubscribed, forKey: Keys.isSubscribed) } }
+	/// Node Watch: show only nodes that were subscribed and later non-destructively unsubscribed.
+	@Published var isUnsubscribed: Bool { didSet { store.set(isUnsubscribed, forKey: Keys.isUnsubscribed) } }
 	@Published var isIgnored: Bool { didSet { store.set(isIgnored, forKey: Keys.isIgnored) } }
 	@Published var isEnvironment: Bool { didSet { store.set(isEnvironment, forKey: Keys.isEnvironment) } }
 	@Published var distanceFilter: Bool { didSet { store.set(distanceFilter, forKey: Keys.distanceFilter) } }
@@ -148,6 +154,8 @@ final class NodeFilterParameters: ObservableObject {
 		isOnline = store.object(forKey: Keys.isOnline) as? Bool ?? false
 		isPkiEncrypted = store.object(forKey: Keys.isPkiEncrypted) as? Bool ?? false
 		isFavorite = store.object(forKey: Keys.isFavorite) as? Bool ?? false
+		isSubscribed = store.object(forKey: Keys.isSubscribed) as? Bool ?? false
+		isUnsubscribed = store.object(forKey: Keys.isUnsubscribed) as? Bool ?? false
 		isIgnored = store.object(forKey: Keys.isIgnored) as? Bool ?? false
 		isEnvironment = store.object(forKey: Keys.isEnvironment) as? Bool ?? false
 		distanceFilter = store.object(forKey: Keys.distanceFilter) as? Bool ?? false
@@ -169,6 +177,8 @@ final class NodeFilterParameters: ObservableObject {
 		isOnline = false
 		isPkiEncrypted = false
 		isFavorite = false
+		isSubscribed = false
+		isUnsubscribed = false
 		isIgnored = false
 		isEnvironment = false
 		distanceFilter = false
@@ -182,7 +192,7 @@ final class NodeFilterParameters: ObservableObject {
 
 	/// Whether any filter is actively narrowing results (ignoring search text).
 	var isFiltering: Bool {
-		isOnline || isPkiEncrypted || isFavorite || isIgnored || isEnvironment ||
+		isOnline || isPkiEncrypted || isFavorite || isSubscribed || isUnsubscribed || isIgnored || isEnvironment ||
 		distanceFilter || hopsAway >= 0.0 || (roleFilter && !deviceRoles.isEmpty) ||
 		(viaLora && !viaMqtt) || (!viaLora && viaMqtt)
 	}
@@ -220,22 +230,27 @@ final class NodeFilterParameters: ObservableObject {
 		onlineThreshold: Date? = nil,
 		distanceBounds: NodeDistanceFilterBounds? = nil
 	) -> Bool {
-		// Search text
-		let text = normalizedSearchText ?? searchText.lowercased()
+		// An explicit search is a database-wide lookup, not another narrowing filter. This lets a
+		// known node be found even when persisted source/online/hop/role/ignored filters hide it.
+		let text = (normalizedSearchText ?? searchText).trimmingCharacters(in: .whitespacesAndNewlines)
 		if !text.isEmpty {
-			let matchesSearch = [
+			return [
 				node.user?.userId,
 				node.user?.numString,
 				node.user?.hwModel,
 				node.user?.hwDisplayName,
 				node.user?.longName,
-				node.user?.shortName
+				node.user?.shortName,
+				String(node.num)
 			].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(text) }
-			if !matchesSearch { return false }
 		}
 
 		// Favorite filter
 		if isFavorite && !node.favorite { return false }
+
+		// Node Watch filters (meshtastic-apple-1ei.10/.26)
+		if isSubscribed && !NodeWatchIdentifier.isWatched(node.num) { return false }
+		if isUnsubscribed && !NodeWatchIdentifier.isInHistory(node.num) { return false }
 
 		// Via Lora/MQTT filters
 		if viaLora && !viaMqtt && node.viaMqtt { return false }

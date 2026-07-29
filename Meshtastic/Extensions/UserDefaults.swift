@@ -93,6 +93,10 @@ extension UserDefaults {
 		case useEventTheme
 		case pairedPeripheralIds
 		case migratedPreferredPeripheralPairing
+		case watchedNodeNums
+		case watchedNodeIdSuffixes
+		case watchedNodeNumsHistory
+		case watchedNodeIdSuffixesHistory
 	}
 
 	func reset() {
@@ -161,6 +165,54 @@ extension UserDefaults {
 
 	@UserDefault(.lowBatteryNotifications, defaultValue: true)
 	static var lowBatteryNotifications: Bool
+
+	/// Node nums the user wants to be notified about when they appear (online transition or first sighting).
+	static var watchedNodeNums: Set<Int64> {
+		get {
+			let arr = UserDefaults.standard.array(forKey: Keys.watchedNodeNums.rawValue) as? [Int] ?? []
+			return Set(arr.map { Int64($0) })
+		}
+		set {
+			UserDefaults.standard.set(Array(newValue).map { Int($0) }, forKey: Keys.watchedNodeNums.rawValue)
+		}
+	}
+
+	/// 4-hex-character short-id suffixes to watch for (lowercase, no leading "!"), for a node
+	/// not yet known well enough to have a full id. Matched against the last 4 hex characters
+	/// of an incoming node's id -- see NodeWatchIdentifier.normalizedSuffix/hexIdMatches.
+	static var watchedNodeIdSuffixes: Set<String> {
+		get {
+			let arr = UserDefaults.standard.array(forKey: Keys.watchedNodeIdSuffixes.rawValue) as? [String] ?? []
+			return Set(arr)
+		}
+		set {
+			UserDefaults.standard.set(Array(newValue), forKey: Keys.watchedNodeIdSuffixes.rawValue)
+		}
+	}
+
+	/// Non-destructive "previously watched" home for node nums removed from `watchedNodeNums`.
+	/// Unsubscribing moves an entry here instead of deleting it; resubscribing moves it back.
+	static var watchedNodeNumsHistory: Set<Int64> {
+		get {
+			let arr = UserDefaults.standard.array(forKey: Keys.watchedNodeNumsHistory.rawValue) as? [Int] ?? []
+			return Set(arr.map { Int64($0) })
+		}
+		set {
+			UserDefaults.standard.set(Array(newValue).map { Int($0) }, forKey: Keys.watchedNodeNumsHistory.rawValue)
+		}
+	}
+
+	/// Non-destructive "previously watched" home for short-id suffixes removed from
+	/// `watchedNodeIdSuffixes`. See `watchedNodeNumsHistory`.
+	static var watchedNodeIdSuffixesHistory: Set<String> {
+		get {
+			let arr = UserDefaults.standard.array(forKey: Keys.watchedNodeIdSuffixesHistory.rawValue) as? [String] ?? []
+			return Set(arr)
+		}
+		set {
+			UserDefaults.standard.set(Array(newValue), forKey: Keys.watchedNodeIdSuffixesHistory.rawValue)
+		}
+	}
 
 	@UserDefault(.modemPreset, defaultValue: 0)
 	static var modemPreset: Int

@@ -631,6 +631,46 @@ struct NodeFilterParametersMatchesTests {
 		#expect(filters.matches(notIgnored))
 	}
 
+	// MARK: Search
+
+	@Test("Search finds a matching node even when normal filters hide it")
+	func searchOverridesNormalFilters() {
+		let context = sharedModelContainer.mainContext
+		let filters = NodeFilterParameters(store: defaults)
+		filters.searchText = "Brooklyn Friend"
+		filters.isOnline = true
+		filters.isFavorite = true
+		filters.roleFilter = true
+		filters.deviceRoles = [2]
+
+		let hiddenMatch = makeNode(context, num: 9_962_001)
+		hiddenMatch.ignored = true
+		hiddenMatch.favorite = false
+		hiddenMatch.lastHeard = .distantPast
+		attachUser(context, to: hiddenMatch, role: 1)
+		hiddenMatch.user?.longName = "My Brooklyn Friend"
+
+		let visibleNonMatch = makeNode(context, num: 9_962_002)
+		visibleNonMatch.favorite = true
+		visibleNonMatch.lastHeard = Date()
+		attachUser(context, to: visibleNonMatch, role: 2)
+		visibleNonMatch.user?.longName = "Someone Else"
+
+		#expect(filters.matches(hiddenMatch, onlineThreshold: Date()))
+		#expect(!filters.matches(visibleNonMatch, onlineThreshold: .distantPast))
+	}
+
+	@Test("Search matches exact decimal node number")
+	func searchMatchesDecimalNodeNumber() {
+		let context = sharedModelContainer.mainContext
+		let filters = NodeFilterParameters(store: defaults)
+		let node = makeNode(context, num: 9_963_001)
+		node.ignored = true
+		filters.searchText = String(node.num)
+
+		#expect(filters.matches(node))
+	}
+
 	// MARK: Environment filter
 
 	@Test("Environment filter matches only nodes with environment telemetry")
