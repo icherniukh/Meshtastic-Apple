@@ -253,6 +253,27 @@ struct RouterTests {
 		#expect(selected == 222)
 	}
 
+	// MARK: - navigateToDirectMessage
+
+	@Test func navigateToDirectMessageSetsConversationAndTab() async {
+		let router = await Router()
+		await router.navigateToDirectMessage(userNum: 4_294_000_001)
+		let state = await router.navigationState
+		let section = await router.messagesSection
+		#expect(state.selectedTab == .messages)
+		#expect(section == .directMessages())
+		#expect(state.messages == .directMessages(userNum: 4_294_000_001))
+	}
+
+	@Test func navigateToDirectMessageReplacesPreviousConversation() async {
+		let router = await Router()
+		await router.navigateToDirectMessage(userNum: 111)
+		await router.navigateToDirectMessage(userNum: 222)
+		let state = await router.navigationState
+		#expect(state.selectedTab == .messages)
+		#expect(state.messages == .directMessages(userNum: 222))
+	}
+
 	// MARK: - popToRoot
 
 	@Test func popToRootNodes() async {
