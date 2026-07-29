@@ -9,7 +9,8 @@ import Foundation
 
 /// Parses a user-entered node identifier for Node Watch (meshtastic-apple-1ei.10) into a
 /// node num. Accepts a full hex node id ("!74dc9f79" or "74dc9f79") or a plain decimal node
-/// num -- both are numerically resolvable without the node ever having appeared in NodeDB.
+/// num -- both are numerically resolvable without the node ever having appeared in NodeDB. A
+/// digits-only eight-character value is interpreted as decimal; prefix it with `!` to force hex.
 /// A short *name* (e.g. "IVAN") is not handled here: names are arbitrary strings with no
 /// numeric relationship to the node num, so they can only be resolved by matching against a
 /// node already present in NodeDB (e.g. by tapping it in the node list). A short *id*
@@ -21,18 +22,20 @@ enum NodeWatchIdentifier {
 		let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 		guard !trimmed.isEmpty else { return nil }
 
-		var hex = trimmed
-		if hex.hasPrefix("!") {
-			hex.removeFirst()
-		}
-		if hex.count == 8, let value = UInt32(hex, radix: 16) {
+		if trimmed.hasPrefix("!") {
+			let hex = String(trimmed.dropFirst())
+			guard hex.count == 8, let value = UInt32(hex, radix: 16) else { return nil }
 			return Int64(value)
 		}
 		// A bare decimal string is ambiguous with a 4-hex-digit short id that happens to be
 		// all-digits (e.g. "1234") -- callers should try `normalizedSuffix` first and only
-		// fall back to decimal node-num parsing once that's been ruled out.
+		// fall back to decimal node-num parsing once that's been ruled out. Decimal takes
+		// precedence for longer digits-only values, too, so "12345678" is not misread as hex.
 		if trimmed.count != 4, let decimal = Int64(trimmed), decimal > 0 {
 			return decimal
+		}
+		if trimmed.count == 8, let value = UInt32(trimmed, radix: 16) {
+			return Int64(value)
 		}
 		return nil
 	}
