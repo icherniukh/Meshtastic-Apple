@@ -490,7 +490,7 @@ extension BLEConnection {
 		} else {
 			#if DEBUG
 			// Too much logging to report every write.
-			Logger.transport.error("🛜 [BLE] Did write for \(characteristic.meshtasticCharacteristicName, privacy: .public)")
+			Logger.transport.debug("🛜 [BLE] Did write for \(characteristic.meshtasticCharacteristicName, privacy: .public)")
 			#endif
 			writeContinuation.resume()
 		}
@@ -517,6 +517,8 @@ extension BLEConnection {
 		}
 		
 		let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
+		let writeTypeDescription = writeType == .withoutResponse ? "withoutResponse" : "withResponse"
+		Logger.transport.debug("🛜 [BLE] Writing ToRadio bytes=\(binaryData.count, privacy: .public) type=\(writeTypeDescription, privacy: .public) characteristic=\(characteristic.meshtasticCharacteristicName, privacy: .public)")
 		try await withCheckedThrowingContinuation { newWriteContinuation in
 			if writeType == .withoutResponse {
 				peripheral.writeValue(binaryData, for: characteristic, type: writeType)

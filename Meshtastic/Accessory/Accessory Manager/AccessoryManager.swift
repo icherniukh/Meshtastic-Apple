@@ -942,6 +942,39 @@ class AccessoryManager: ObservableObject, MqttClientProxyManagerDelegate {
 				case .unknownApp:
 					Logger.mesh.info("[Unknown] packet received from \(packet.from.toHex(), privacy: .public)")
 				}
+			} else {
+				let payloadKind: String
+				if case .encrypted = packet.payloadVariant {
+					payloadKind = "encrypted"
+				} else if packet.payloadVariant == nil {
+					payloadKind = "none"
+				} else {
+					payloadKind = "undecoded"
+				}
+				let activeNodeNum = self.activeDeviceNum
+				let addressedToActiveNode = activeNodeNum.map { Int64(packet.to) == $0 } ?? false
+				if addressedToActiveNode || packet.wantAck {
+					// Record key state, never key material or payloads. For channel traffic an undecoded
+					// packet usually indicates a channel-key mismatch; for PKI traffic these fields show
+					// whether our stored sender contact is missing, stale, or awaiting verification.
+					let senderNum = Int64(packet.from)
+					var senderDescriptor = FetchDescriptor<UserEntity>(predicate: #Predicate { $0.num == senderNum })
+					senderDescriptor.fetchLimit = 1
+					let sender = (try? context.fetch(senderDescriptor))?.first
+					let senderKeyBytes = sender?.publicKey?.count ?? 0
+					let pendingSenderKeyBytes = sender?.newPublicKey?.count ?? 0
+					let packetKeyBytes = packet.publicKey.count
+					let encryption = packet.pkiEncrypted ? "pki" : "channel"
+					let packetContext = "payload=\(payloadKind) id=\(packet.id) from=\(packet.from.toHex()) to=\(packet.to.toHex()) active=\(activeNodeNum?.toHex() ?? "none") channel=\(packet.channel) wantAck=\(packet.wantAck) encryption=\(encryption) senderKnown=\(sender != nil) senderKeyBytes=\(senderKeyBytes) pendingSenderKeyBytes=\(pendingSenderKeyBytes) packetKeyBytes=\(packetKeyBytes) storedKeyMatch=\(sender?.keyMatch ?? true) rssi=\(packet.rxRssi) snr=\(packet.rxSnr)"
+					if addressedToActiveNode {
+						Logger.mesh.warning("🕸️ Received undecodable packet addressed to the connected node: \(packetContext, privacy: .public)")
+					} else {
+						Logger.mesh.debug("🕸️ Received undecodable packet that requested an ACK: \(packetContext, privacy: .public)")
+					}
+				} else if packet.pkiEncrypted {
+					// Preserve a lightweight trace for ambient PKI traffic without fetching SwiftData.
+					Logger.mesh.debug("🔐 Ignoring undecodable ambient PKI packet payload=\(payloadKind, privacy: .public) id=\(packet.id, privacy: .public) from=\(packet.from.toHex(), privacy: .public) to=\(packet.to.toHex(), privacy: .public) channel=\(packet.channel, privacy: .public)")
+				}
 			}
 			// Flush via the debouncer rather than saving immediately. This runs for
 			// EVERY packet, so an immediate save here force-flushed the whole context

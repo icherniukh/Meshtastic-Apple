@@ -404,8 +404,13 @@ extension AppLog {
 			let textSearchPredicate = NSCompoundPredicate(type: .or, subpredicates: searchPredicates)
 			/// Create an array of predicates to hold our AND predicates
 			var predicates: [NSPredicate] = []
-			/// Subsystem Predicate
-			let subsystemPredicate = NSPredicate(format: "subsystem IN %@", ["com.apple.SwiftUI", "com.apple.coredata", "gvh.MeshtasticClient"])
+			/// Subsystem Predicate. Use the running app's bundle identifier so fork/release bundle
+			/// changes do not silently hide our own diagnostic entries from the log viewer/export.
+			let appSubsystem = Bundle.main.bundleIdentifier ?? "gvh.MeshtasticClient"
+			let subsystemPredicate = NSPredicate(
+				format: "subsystem IN %@",
+				["com.apple.SwiftUI", "com.apple.coredata", appSubsystem, "gvh.MeshtasticClient"]
+			)
 			predicates.append(subsystemPredicate)
 			/// Categories
 			if categories.count > 0 {

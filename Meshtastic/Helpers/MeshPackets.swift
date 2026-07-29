@@ -921,13 +921,17 @@ actor MeshPackets {
 			do {
 				let fetchedMessage = try modelContext.fetch(fetchDescriptor)
 				if fetchedMessage.count > 0 {
-					if fetchedMessage[0].toUser != nil {
+					let message = fetchedMessage[0]
+					if routingError == .pkiUnknownPubkey || routingError == .pkiFailed {
+						Logger.mesh.warning("🔑 Routing key error requestId=\(requestID, privacy: .public) code=\(routingMessage.errorReason.rawValue, privacy: .public) status=\(routingErrorString, privacy: .public) messageFrom=\(message.fromUser?.num.toHex() ?? "unknown", privacy: .public) messageTo=\(message.toUser?.num.toHex() ?? "unknown", privacy: .public) pki=\(message.pkiEncrypted, privacy: .public) messageKeyBytes=\(message.publicKey?.count ?? 0, privacy: .public) recipientKeyBytes=\(message.toUser?.publicKey?.count ?? 0, privacy: .public) recipientKeyMatch=\(message.toUser?.keyMatch ?? true, privacy: .public)")
+					}
+					if message.toUser != nil {
 						// Real ACK from DM Recipient
 						if packet.to != packet.from {
-							fetchedMessage[0].realACK = true
+							message.realACK = true
 						}
 					}
-					fetchedMessage[0].relayNode = Int64(packet.relayNode)
+					message.relayNode = Int64(packet.relayNode)
 					fetchedMessage[0].ackError = Int32(routingMessage.errorReason.rawValue)
 					if routingMessage.errorReason == Routing.Error.none {
 						fetchedMessage[0].receivedACK = true
@@ -1403,9 +1407,7 @@ actor MeshPackets {
 								if nodeKey != newMessage.publicKey {
 									newMessage.fromUser?.keyMatch = false
 									newMessage.fromUser?.newPublicKey = newMessage.publicKey
-									let nodeKey = String(nodeKey.base64EncodedString()).prefix(8)
-									let messageKey = String(newMessage.publicKey?.base64EncodedString() ?? "No Key").prefix(8)
-									Logger.data.error("🔑 Key mismatch original key: \(nodeKey, privacy: .public) . . . new key: \(messageKey, privacy: .public) . . .")
+									Logger.data.error("🔑 PKI key mismatch id=\(packet.id, privacy: .public) from=\(packet.from.toHex(), privacy: .public) to=\(packet.to.toHex(), privacy: .public) storedKeyBytes=\(nodeKey.count, privacy: .public) receivedKeyBytes=\(newMessage.publicKey?.count ?? 0, privacy: .public); key bytes intentionally omitted")
 								}
 							}
 						} else if packet.pkiEncrypted {

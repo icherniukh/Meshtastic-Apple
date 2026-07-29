@@ -160,7 +160,7 @@ actor BLETransport: Transport {
 				await setupCleanupTask()
 			}
 			cont.onTermination = { _ in
-				Logger.transport.error("🛜 [BLE] Discovery event stream has been canecelled.")
+				Logger.transport.error("🛜 [BLE] Discovery event stream has been cancelled.")
 				Task {
 					await self.stopScanning()
 				}
@@ -186,7 +186,7 @@ actor BLETransport: Transport {
 		
 				try? await Task.sleep(for: .seconds(15)) // Cleanup every 15 seconds
 			}
-			Logger.transport.debug("🛜 [BLE] Discovery clean up task has been canecelled.")
+			Logger.transport.debug("🛜 [BLE] Discovery clean up task has been cancelled.")
 		}
 	}
 
@@ -212,7 +212,7 @@ actor BLETransport: Transport {
 	}
 
 	func handleCentralState(_ state: CBManagerState, central: CBCentralManager) {
-		Logger.transport.error("🛜 [BLE] State has transitioned to: \(cbManagerStateDescription(state), privacy: .public)")
+		Logger.transport.info("🛜 [BLE] State has transitioned to: \(cbManagerStateDescription(state), privacy: .public)")
 		switch state {
 		case .poweredOn:
 			if activeConnection != nil {
@@ -367,21 +367,21 @@ actor BLETransport: Transport {
 		case let cbError as CBError:
 			switch cbError.code {
 			case .connectionTimeout: // 6
-				// Happens when the node goes out of range or the shutdown or reset buttons are presses
+				// Happens when the node goes out of range or the shutdown or reset buttons are pressed
 				// Should disconnect, show error, and retry when re-advertised
-				Logger.transport.error("🛜 [BLETransport] Disconnected with CBError code: \(cbError.code.rawValue) - \(cbError.localizedDescription)")
+				Logger.transport.error("🛜 [BLETransport] Disconnected with CBError code: \(cbError.code.rawValue) connectionTimeout - \(cbError.localizedDescription). shouldReconnect=true; possible range loss, shutdown, or reset.")
 				shouldReconnect = true
 			case .peripheralDisconnected: // 7
 				// Happens when the node reboots or shuts down intentionally via the firmware or app
 				// Should disconnect, show error, and retry when re-advertised
-				Logger.transport.error("🛜 [BLETransport] Disconnected with CBError code: \(cbError.code.rawValue) - \(cbError.localizedDescription)")
+				Logger.transport.error("🛜 [BLETransport] Disconnected with CBError code: \(cbError.code.rawValue) peripheralDisconnected - \(cbError.localizedDescription). shouldReconnect=true; likely node reboot or shutdown initiated by firmware or app.")
 				shouldReconnect = true
 			default:
 				// Fallback for other CBError codes
-				Logger.transport.error("🛜 [BLETransport] Disconnected with CBError code: \(cbError.code.rawValue) - \(cbError.localizedDescription)")
+				Logger.transport.error("🛜 [BLETransport] Disconnected with CBError code: \(cbError.code.rawValue) - \(cbError.localizedDescription). shouldReconnect=false")
 			}
 		case let otherError:
-			Logger.transport.error("🛜 [BLETransport] Disconnected with non-CBError: \(otherError.localizedDescription)")
+			Logger.transport.error("🛜 [BLETransport] Disconnected with non-CBError: \(otherError.localizedDescription). shouldReconnect=false")
 		}
 		
 		if let continuation = self.connectContinuation {
@@ -606,7 +606,7 @@ class BLEDelegate: NSObject, CBCentralManagerDelegate {
 			Logger.transport.error("🛜 [BLETransport] Error while disconnecting peripheral: \(peripheral.name ?? ""): \(error)")
 			Task { await transport?.handlePeripheralDisconnectError(peripheral: peripheral, error: error) }
 		} else {
-			Logger.transport.error("🛜 [BLETransport] Did succesfully disconnect peripheral: \(peripheral.name ?? "")")
+			Logger.transport.info("🛜 [BLETransport] Did successfully disconnect peripheral: \(peripheral.name ?? "", privacy: .public)")
 			Task { await transport?.handlePeripheralDisconnect(peripheral: peripheral) }
 		}
 	}
