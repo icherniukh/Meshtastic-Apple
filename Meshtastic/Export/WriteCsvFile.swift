@@ -127,22 +127,32 @@ func detectionsToCsv(detections: [MessageEntity]) -> String {
 }
 
 func logToCsvFile(log: [OSLogEntryLog]) -> String {
-	var csvString: String = ""
-	// Create PAX Header
-	csvString = "Process, Category, Level, Message, \("Timestamp".localized)"
+	var csvString = [
+		csvField("Process"),
+		csvField("Category"),
+		csvField("Level"),
+		csvField("Message"),
+		csvField("Timestamp".localized)
+	].joined(separator: ",")
 	for l in log {
-		csvString += "\n"
-		csvString += String(l.process)
-		csvString += ", "
-		csvString += String(l.category)
-		csvString += ", "
-		csvString += String(l.level.description)
-		csvString += ", "
-		csvString += String(l.composedMessage)
-		csvString += ", "
-		csvString += l.date.formatted(date: .numeric, time: .shortened).replacing(",", with: "")
+		let row = [
+			csvField(String(l.process)),
+			csvField(String(l.category)),
+			csvField(String(l.level.description)),
+			csvField(String(l.composedMessage)),
+			csvField(l.date.formatted(date: .numeric, time: .shortened).replacing(",", with: ""))
+		].joined(separator: ",")
+		csvString += "\n\(row)"
 	}
 	return csvString
+}
+
+func csvField(_ value: String) -> String {
+	let needsEscaping = value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r")
+	guard needsEscaping else {
+		return value
+	}
+	return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
 }
 
 func paxToCsvFile(pax: [PaxCounterEntity]) -> String {
