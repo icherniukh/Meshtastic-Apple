@@ -77,6 +77,20 @@ struct PositionPopover: View {
 								.frame(width: 35)
 						}
 						.padding(.bottom, 5)
+						/// BRC Address
+						if let coord = position.nodeCoordinate, let brc = BRCAddress.address(for: coord) {
+							Label {
+								Text(brc)
+									.textSelection(.enabled)
+									.foregroundColor(.primary)
+									.font(idiom == .phone ? .callout : .body)
+							} icon: {
+								Image(systemName: "signpost.right.fill")
+									.symbolRenderingMode(.hierarchical)
+									.frame(width: 35)
+							}
+							.padding(.bottom, 5)
+						}
 						/// Hops Away
 						if position.nodePosition?.hopsAway ?? 0 > 0 {
 							Label {

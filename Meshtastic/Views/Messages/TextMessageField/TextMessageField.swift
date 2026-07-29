@@ -29,7 +29,8 @@ struct TextMessageField: View {
 				maxbytes: Self.maxbytes,
 				onSend: sendMessage,
 				onAlert: { typingMessage += "🔔 Alert Bell Character! \u{7}" },
-				onRequestPosition: requestPosition
+				onRequestPosition: requestPosition,
+				onShareLocation: shareLocation
 			)
 		} else {
 			VStack(spacing: 0) {
@@ -127,6 +128,8 @@ struct TextMessageField: View {
 			Spacer()
 			RequestPositionButton(action: requestPosition)
 			Spacer()
+			ShareLocationButton(action: shareLocation)
+			Spacer()
 			TextMessageSize(maxbytes: Self.maxbytes, totalBytes: totalBytes)
 		}
 	}
@@ -135,6 +138,22 @@ struct TextMessageField: View {
 		let userLongName = accessoryManager.activeConnection?.device.longName ?? "Unknown"
 		sendPositionWithMessage = true
 		typingMessage = "📍 " + userLongName + " \(destination.positionShareMessage)."
+	}
+
+	private func shareLocation() {
+		let userLongName = accessoryManager.activeConnection?.device.longName ?? "Unknown"
+		let place: String
+		if let coord = LocationsHandler.currentLocation {
+			if let brc = BRCAddress.address(for: coord) {
+				place = brc
+			} else {
+				place = String(format: "%.5f, %.5f", coord.latitude, coord.longitude)
+			}
+		} else {
+			place = "an unknown location"
+		}
+		sendPositionWithMessage = true
+		typingMessage = "📍 " + userLongName + " is at \(place)."
 	}
 
 	private func sendMessage() {
@@ -180,6 +199,7 @@ private struct FormattingComposeArea: View {
 	let onSend: () -> Void
 	let onAlert: () -> Void
 	let onRequestPosition: () -> Void
+	let onShareLocation: () -> Void
 
 	@State private var textSelection: TextSelection?
 	@State private var showToolbar = false
@@ -305,6 +325,11 @@ private struct FormattingComposeArea: View {
 		onRequestPosition()
 	}
 
+	private func shareLocation() {
+		textSelection = nil
+		onShareLocation()
+	}
+
 	private var toolbarContent: some View {
 		HStack {
 			ScrollView(.horizontal, showsIndicators: false) {
@@ -327,6 +352,7 @@ private struct FormattingComposeArea: View {
 					#endif
 					AlertButton(action: alert, compact: true)
 					RequestPositionButton(action: requestPosition, compact: true)
+					ShareLocationButton(action: shareLocation, compact: true)
 				}
 			}
 			Spacer()

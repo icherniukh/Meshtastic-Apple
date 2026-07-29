@@ -1,3 +1,5 @@
+import CoreLocation
+import MapKit
 import MeshtasticProtobufs
 import OSLog
 import SwiftUI
@@ -103,10 +105,13 @@ struct MessageText: View {
 	private var baseMessageContent: some View {
 		let payload = message.displayedMarkdownPayload
 		return Group {
-			if let attributed = try? AttributedString(markdown: payload, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-				Text(underlineLinks(in: attributed))
+			if isPositionShare, let coord = positionShareCoordinate {
+				VStack(alignment: .leading, spacing: 4) {
+					messageTextContent(payload: payload)
+					positionShareExtras(coordinate: coord)
+				}
 			} else {
-				Text(LocalizedStringKey(payload))
+				messageTextContent(payload: payload)
 			}
 		}
 			.tint(Color("Colors/MeshtasticLink"))
@@ -133,7 +138,6 @@ struct MessageText: View {
 				)
 			}
 	}
-	
 	/// A bottom-trailing status badge (encryption lock, signing shield, store-forward envelope) with
 	/// its symbol, tint, and localized VoiceOver label.
 	private struct CornerBadge: Identifiable {
@@ -142,6 +146,71 @@ struct MessageText: View {
 		let symbol: String
 		let tint: Color
 		let label: String
+	}
+
+	@ViewBuilder
+	private func messageTextContent(payload: String) -> some View {
+		if let attributed = try? AttributedString(markdown: payload, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+			Text(underlineLinks(in: attributed))
+		} else {
+			Text(LocalizedStringKey(payload))
+		}
+	}
+
+	private var isPositionShare: Bool {
+		guard let payload = message.messagePayload else { return false }
+		return payload.hasPrefix("📍")
+	}
+
+	private var positionShareCoordinate: CLLocationCoordinate2D? {
+		guard let payload = message.messagePayload,
+		      payload.hasPrefix("📍"),
+		      let range = payload.range(of: " is at ") else { return nil }
+		let place = String(payload[range.upperBound...])
+			.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+			.trimmingCharacters(in: .whitespaces)
+		if let coord = BRCAddress.coordinate(forAddress: place) {
+			return coord
+		}
+		let parts = place.split(separator: ",")
+		if parts.count == 2,
+		   let lat = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+		   let lon = Double(parts[1].trimmingCharacters(in: .whitespaces)) {
+			return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+		}
+		return nil
+	}
+
+	@ViewBuilder
+	private func positionShareExtras(coordinate: CLLocationCoordinate2D) -> some View {
+		Divider()
+		HStack {
+			Image(systemName: "location.fill")
+				.symbolRenderingMode(.hierarchical)
+			Text(distanceLabel(from: coordinate))
+				.font(.caption)
+			Spacer()
+			Button {
+				let placemark = MKPlacemark(coordinate: coordinate)
+				let mapItem = MKMapItem(placemark: placemark)
+				mapItem.openInMaps()
+			} label: {
+				Label("Open in Maps", systemImage: "map.fill")
+					.font(.caption)
+			}
+			.foregroundColor(isCurrentUser ? .white : .accentColor)
+		}
+	}
+
+	private func distanceLabel(from coordinate: CLLocationCoordinate2D) -> String {
+		guard let userCoord = LocationsHandler.currentLocation else { return "Distance unknown" }
+		let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+		let nodeLoc = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+		let distance = userLoc.distance(from: nodeLoc)
+		if distance < 1000 {
+			return "\(Int(distance)) m away"
+		}
+		return String(format: "%.1f km away", distance / 1000)
 	}
 
 	/// Bottom-trailing status badges (encryption lock, signing shield, store-forward envelope), laid out

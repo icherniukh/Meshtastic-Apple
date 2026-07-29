@@ -6,8 +6,10 @@
 //
 
 import SwiftUI
+import CoreLocation
 import MeshtasticProtobufs
 import OSLog
+import UIKit
 
 struct PositionFlags: OptionSet {
 	let rawValue: Int
@@ -28,7 +30,10 @@ struct PositionConfig: View {
 	@Environment(\.modelContext) private var context
 	@EnvironmentObject var accessoryManager: AccessoryManager
 	@Environment(\.dismiss) private var goBack
+	@Environment(\.openURL) private var openURL
 	let node: NodeInfoEntity?
+	@AppStorage("provideLocation") private var provideLocation = false
+	@State private var showLocationPermissionAlert = false
 	@State var hasChanges = false
 	@State var hasFlagChanges = false
 	@State var smartPositionEnabled = true
@@ -74,6 +79,29 @@ struct PositionConfig: View {
 	@State private var supportedVersion = true
 	@State private var showingSetFixedAlert = false
 	// @State private var showingRemoveFixedAlert = false
+
+	private var iPhoneLocationBinding: Binding<Bool> {
+		Binding(
+			get: { provideLocation },
+			set: { enabled in
+				guard enabled else {
+					provideLocation = false
+					return
+				}
+				Task { @MainActor in
+					let status = await LocationsHandler.shared.requestLocationAlwaysPermissions()
+					guard status == .authorizedAlways || status == .authorizedWhenInUse else {
+						provideLocation = false
+						showLocationPermissionAlert = true
+						return
+					}
+					UserDefaults.provideLocationInterval = 30
+					provideLocation = true
+					LocationsHandler.shared.startLocationUpdates()
+				}
+			}
+		)
+	}
 	
 	@ViewBuilder
 	var positionPacketSection: some View {
@@ -129,44 +157,92 @@ struct PositionConfig: View {
 	
 	@ViewBuilder
 	var deviceGPSSection: some View {
-		Section(header: Text("Device GPS")) {
-			Picker("", selection: $gpsMode) {
-				ForEach(GpsMode.allCases, id: \.self) { at in
-					Text(at.description)
-						.tag(at.id)
+		let isConnectedNode = node?.num == accessoryManager.activeDeviceNum
+
+		Section {
+			Picker("Device GPS", selection: $gpsMode) {
+				ForEach(GpsMode.allCases, id: \.self) { mode in
+					Text(mode.description)
+						.tag(mode.id)
 				}
 			}
-			.pickerStyle(SegmentedPickerStyle())
-			.padding(.top, 5)
-			.padding(.bottom, 5)
-			.disabled(fixedPosition && !(gpsMode == 1))
-			if gpsMode == 1 {
-				Text("Positions will be provided by your device GPS, if you select disabled or not present you can set a fixed position.")
-					.foregroundColor(.gray)
-					.font(.callout)
+			.pickerStyle(.segmented)
+			.padding(.vertical, 5)
+			.disabled(fixedPosition && gpsMode != GpsMode.enabled.rawValue)
+
+			Group {
+				switch GpsMode(rawValue: gpsMode) {
+				case .enabled:
+					Text("The node uses its built-in GPS hardware.")
+				case .disabled:
+					if isConnectedNode {
+						Text("The node's GPS hardware is turned off. Fixed position and iPhone location remain available.")
+					} else {
+						Text("The selected node's GPS hardware is turned off.")
+					}
+				case .notPresent:
+					if isConnectedNode {
+						Text("Use this when the node has no GPS hardware. Fixed position and iPhone location remain available.")
+					} else {
+						Text("Use this when the selected node has no GPS hardware.")
+					}
+				case nil:
+					EmptyView()
+				}
+			}
+			.foregroundStyle(.secondary)
+			.font(.callout)
+
+			if gpsMode == GpsMode.enabled.rawValue {
 				VStack(alignment: .leading) {
 					Picker("Update Interval", selection: $gpsUpdateInterval) {
-						ForEach(GpsUpdateIntervals.allCases) { ui in
-							Text(ui.description)
+						ForEach(GpsUpdateIntervals.allCases) { interval in
+							Text(interval.description)
 						}
 					}
-					Text("How often should we try to get a GPS position.")
-						.foregroundColor(.gray)
+					Text("How often the node tries to get a GPS position.")
+						.foregroundStyle(.secondary)
 						.font(.callout)
 				}
 			}
-			if (gpsMode != 1 && node?.num ?? 0 == accessoryManager.activeDeviceNum ?? -1) || fixedPosition {
-				VStack(alignment: .leading) {
-					Toggle(isOn: $fixedPosition) {
-						Label("Fixed Position", systemImage: "location.square.fill")
-						if !(node?.positionConfig?.fixedPosition ?? false) {
-							Text("Your current location will be set as the fixed position and broadcast over the mesh on the position interval.")
-						} else {
-							
-						}
+
+			if (gpsMode != GpsMode.enabled.rawValue && isConnectedNode) || fixedPosition {
+				Toggle(isOn: $fixedPosition) {
+					Label("Fixed Position", systemImage: "location.square.fill")
+					if !(node?.positionConfig?.fixedPosition ?? false) {
+						Text("Your current location will be set as the fixed position and broadcast over the mesh on the position interval.")
 					}
-					.tint(.accentColor)
 				}
+				.tint(.accentColor)
+			}
+		} header: {
+			Text("Device GPS")
+		} footer: {
+			if isConnectedNode {
+				Text("This controls only the GPS hardware in the node. It does not turn iPhone location sharing on or off.")
+			} else {
+				Text("This controls the GPS hardware in the selected node.")
+			}
+		}
+
+		if isConnectedNode {
+			Section {
+				Toggle("Share Location", isOn: iPhoneLocationBinding)
+					.tint(.accentColor)
+					.alert("Location Access Needed", isPresented: $showLocationPermissionAlert) {
+						Button("Open Settings") {
+							if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+								openURL(settingsURL)
+							}
+						}
+						Button("Cancel", role: .cancel) {}
+					} message: {
+						Text("Allow location access in iOS Settings before sharing this iPhone's location with the node.")
+					}
+			} header: {
+				Text("Phone Location")
+			} footer: {
+				Text("When enabled, this iPhone sends its location to the connected node. This is independent of the Device GPS setting above.")
 			}
 		}
 	}
